@@ -30,6 +30,7 @@ GUI_CONFIG_DEFAULTS = {
 
 # Default values for the optional settings.
 BACKEND_CONFIG_DEFAULTS = {
+    "spectrum": None,
     "default_config": None,
     "statefile_path": None,
     "on_set_active_config": None,

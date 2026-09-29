@@ -9,6 +9,14 @@ BACKEND_CONFIG_SCHEMA = {
         "port": {
             "type": "integer",
         },
+        "spectrum": {
+            "type": ["object", "null"],
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            },
+            "additionalProperties": False,
+        },
         "ssl_certificate": {"type": ["string", "null"], "minLength": 1},
         "ssl_private_key": {"type": ["string", "null"], "minLength": 1},
         "gui_config_file": {"type": ["string", "null"], "minLength": 1},

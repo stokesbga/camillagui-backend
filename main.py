@@ -11,6 +11,7 @@ from backend.routes import setup_routes, setup_static_routes
 from backend.settings import CONFIG_PATH, get_config
 from backend.version import VERSION
 from backend.views import version_string
+from backend.spectrum import setup_spectrum
 
 LOG_LEVELS = ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]
 
@@ -35,6 +36,7 @@ def build_app(backend_config):
     app["gui_config_file"] = backend_config["gui_config_file"]
     setup_routes(app)
     setup_static_routes(app)
+    setup_spectrum(app, backend_config.get("spectrum"))
 
     app["CAMILLA"] = camilladsp.CamillaClient(
         backend_config["camilla_host"], backend_config["camilla_port"]

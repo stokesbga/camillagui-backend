@@ -354,3 +354,9 @@ Execute the tests with:
 ```sh
 python -m pytest
 ```
+
+## Master-output spectrum
+
+An optional ALSA playback tap supplies post-DSP FFT data to the GUI. See
+[setup, API, verification and rollback instructions](docs/spectrum.md).
+It is disabled by default and does not change the existing playback device.

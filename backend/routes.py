@@ -1,5 +1,6 @@
 from .settings import BASEPATH
 from .statics import NoCacheStaticResource
+from .spectrum import get_spectrum
 from .views import (
     config_to_yml,
     delete_coeffs,
@@ -47,6 +48,7 @@ from .views import (
 
 def setup_routes(app):
     app.router.add_get("/api/status", get_status)
+    app.router.add_get("/api/spectrum", get_spectrum)
     app.router.add_get("/api/getparam/{name}", get_param)
     app.router.add_get("/api/getparamjson/{name}", get_param_json)
     app.router.add_get("/api/getlistparam/{name}", get_list_param)
