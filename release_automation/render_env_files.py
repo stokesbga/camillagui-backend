@@ -1,31 +1,24 @@
-import os
+import argparse
+from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
 
 from backend.version import VERSION
 
-script_dir = os.path.dirname(__file__)
 
-with open(os.path.join(script_dir, "versions.yml")) as f:
-    versions = yaml.safe_load(f)
+def render(output_dir):
+    script_dir = Path(__file__).resolve().parent
+    versions = yaml.safe_load((script_dir / "versions.yml").read_text())
+    versions["backend_version"] = ".".join(str(v) for v in VERSION)
+    environment = Environment(loader=FileSystemLoader(script_dir / "templates"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("requirements.txt", "cdsp_conda.yml", "pyproject.toml"):
+        rendered = environment.get_template(filename + ".j2").render(versions)
+        (output_dir / filename).write_text(rendered, encoding="utf-8")
 
-versions["backend_version"] = ".".join(str(v) for v in VERSION)
 
-environment = Environment(
-    loader=FileSystemLoader(os.path.join(script_dir, "templates/"))
-)
-
-filenames = [
-    "requirements.txt",
-    "cdsp_conda.yml",
-    "pyproject.toml",
-]
-
-for filename in filenames:
-    t = environment.get_template(filename + ".j2")
-
-    # render and write
-    rendered = t.render(versions)
-    with open(filename, mode="w", encoding="utf-8") as f:
-        f.write(rendered)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Render release dependency files")
+    parser.add_argument("--output-dir", type=Path, default=Path.cwd())
+    render(parser.parse_args().output_dir)

@@ -1,226 +1,211 @@
-name: npm build
+name: Build and release
 
-on: [push]
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: Platforms to bundle
+        type: choice
+        options: [raspberry-pi-64, all]
+        default: raspberry-pi-64
+      frontend_ref:
+        description: Frontend branch, tag or SHA (blank uses versions.yml)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
 
 jobs:
-
-  read_fe_tag:
+  settings:
     runs-on: ubuntu-latest
     outputs:
-      fe_tag: ${{ steps.fe_tag_step.outputs.fe_tag }}
+      repository: ${{ steps.settings.outputs.repository }}
+      ref: ${{ steps.settings.outputs.ref }}
+      matrix: ${{ steps.settings.outputs.matrix }}
+      all: ${{ steps.settings.outputs.all }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Get CamillaGUI tag from versions.yml
-      id: fe_tag_step
-      run: |
-        FE_TAG=$(sed -n 's/camillagui_tag: \(.*\)$/\1/p' release_automation/versions.yml)
-        echo "fe_tag=$FE_TAG"
-        echo "fe_tag=$FE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML
+      - id: settings
+        env:
+          FRONTEND_REF: ${{ inputs.frontend_ref }}
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          python - <<'PY'
+          import json, os, yaml
+          from pathlib import Path
+          versions = yaml.safe_load(Path('release_automation/versions.yml').read_text())
+          all_platforms = os.environ['TARGETS'] == 'all' or os.environ['GITHUB_REF'].startswith('refs/tags/')
+          matrix = [dict(os='ubuntu-22.04-arm', asset='bundle_linux_aarch64.tar.gz')]
+          if all_platforms:
+              matrix += [
+                  dict(os='ubuntu-22.04', asset='bundle_linux_amd64.tar.gz'),
+                  dict(os='windows-latest', asset='bundle_windows_amd64.zip'),
+                  dict(os='macos-latest', asset='bundle_macos_aarch64.tar.gz'),
+                  dict(os='macos-15-intel', asset='bundle_macos_intel.tar.gz'),
+              ]
+          values = {
+              'repository': versions['camillagui_repository'],
+              'ref': os.environ['FRONTEND_REF'] or versions['camillagui_tag'],
+              'matrix': json.dumps({'include': matrix}),
+              'all': str(all_platforms).lower(),
+          }
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              for key, value in values.items():
+                  if '\n' in value or '\r' in value:
+                      raise ValueError('Settings must be single-line values')
+                  print(f'{key}={value}', file=out)
+          PY
 
-  build_fe:
+  frontend:
+    needs: settings
     runs-on: ubuntu-latest
-    needs: read_fe_tag
+    outputs:
+      sha: ${{ steps.revision.outputs.sha }}
     steps:
-    - uses: actions/checkout@v4
-      name: Check out frontend ${{ needs.read_fe_tag.outputs.fe_tag }}
-      with:
-        repository: HEnquist/camillagui
-        ref: ${{ needs.read_fe_tag.outputs.fe_tag }}
-    - name: Build and publish
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-    - run: npm install
-    - run: npm run build
-    - name: Upload build
-      uses: actions/upload-artifact@v4
-      with:
-        name: build
-        path: build
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.settings.outputs.repository }}
+          ref: ${{ needs.settings.outputs.ref }}
+      - id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: build
+          if-no-files-found: error
 
-  build_and_test_be:
+  source:
+    needs: [settings, frontend]
     runs-on: ubuntu-latest
-    needs: build_fe
     steps:
-    - uses: actions/checkout@v4
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install jinja2 PyYAML
+      - run: python -Bm release_automation.render_env_files --output-dir .release-env
+      - run: python -m pip install -r .release-env/requirements.txt pytest-aiohttp
+      - run: python -Bm pytest
+      - name: Remove test-generated state file
+        run: rm -f tests/testfiles/statefile.yml
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend
+          path: build
+      - name: Stage source distribution
+        env:
+          FRONTEND_REPOSITORY: ${{ needs.settings.outputs.repository }}
+          FRONTEND_SHA: ${{ needs.frontend.outputs.sha }}
+        run: >-
+          python -Bm release_automation.package source
+          --frontend-repository "$FRONTEND_REPOSITORY" --frontend-ref "$FRONTEND_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-source
+          path: release-dist/source
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: |
+            release-dist/camillagui.zip
+            release-dist/camillagui.zip.sha256
+          if-no-files-found: error
 
-    - name: Install template render dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install jinja2 PyYAML
-
-    - name: Rename original pyproject.toml
-      run: mv pyproject.toml pyproject.toml.orig
-
-    - name: Render scripts from templates
-      run: python -Bm release_automation.render_env_files
-
-    - name: Rename rendered pyproject.toml and restore original
-      run: |
-        mv pyproject.toml pyproject.toml.rendered
-        mv pyproject.toml.orig pyproject.toml
-
-    - name: Install requirements
-      run: python -m pip install -r requirements.txt
-
-    - name: Set up pytest
-      run: python -m pip install pytest-aiohttp
-
-    - name: Run python tests
-      run: python -Bm pytest
-
-    - name: Replace original pyproject.toml with rendered
-      run: |
-        rm pyproject.toml
-        mv pyproject.toml.rendered pyproject.toml
-
-    - name: Clean up
-      run: |
-        rm -rf release_automation
-        rm -rf tests
-
-    - name: Download frontend
-      uses: actions/download-artifact@v4
-
-    - name: Create zip
-      run: zip -r camillagui.zip *
-
-    - name: Upload all as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: camillagui-backend
-        path: |
-          .
-          !.git*
-
-    - name: Upload binaries to release
-      if: contains(github.ref, 'refs/tags/')
-      uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: camillagui.zip
-        asset_name: camillagui.zip
-        tag: ${{ github.ref }}
-
-  pyinstaller_native:
-    name: Bundle for ${{ matrix.os }}
+  native:
+    name: Bundle ${{ matrix.asset }}
+    needs: [settings, source]
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            asset_name: bundle_linux_amd64.tar.gz
-            filename: bundle.tar.gz
-          - os: ubuntu-22.04-arm
-            asset_name: bundle_linux_aarch64.tar.gz
-            filename: bundle.tar.gz
-          - os: windows-latest
-            asset_name: bundle_windows_amd64.zip
-            filename: bundle.zip
-          - os: macos-latest
-            asset_name: bundle_macos_aarch64.tar.gz
-            filename: bundle.tar.gz
-          - os: macos-15-intel
-            asset_name: bundle_macos_intel.tar.gz
-            filename: bundle.tar.gz
-    needs: build_and_test_be
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.settings.outputs.matrix) }}
     steps:
-    - name: Download complete distribution
-      uses: actions/download-artifact@v4
-      with:
-        name: camillagui-backend
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - run: pip install -r requirements.txt
-      name: Install backend dependencies
-
-    - run: pip install pyinstaller
-      name: Install pyinstaller
-
-    - name: Bundle app with pyinstaller
-      run: pyinstaller ./main.py --add-data ./config/:config --add-data ./build/:build --collect-data camilladsp_plot --name camillagui_backend
-
-    - name: Compress as zip
-      if: ${{ contains(matrix.os, 'windows') }}
-      run: powershell Compress-Archive ./dist/camillagui_backend ${{ matrix.filename }}
-    - name: Compress as tar.gz
-      if: ${{ contains(matrix.os, 'macos') }}
-      run: tar -zcvf ${{ matrix.filename }} -C ./dist camillagui_backend
-    - name: Compress as tar.gz
-      if: ${{ contains(matrix.os, 'ubuntu') }}
-      run: tar -zcvf ${{ matrix.filename }} -C ./dist camillagui_backend --owner=0 --group=0 --numeric-owner
-
-    - name: Upload bundle as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.asset_name }}
-        path: ${{ matrix.filename }}
-
-    - name: Upload bundle to release
-      if: contains(github.ref, 'refs/tags/')
-      uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: ${{ matrix.filename }}
-        asset_name: ${{ matrix.asset_name }}
-        tag: ${{ github.ref }}
-
-  pyinstaller_qemu:
-    runs-on: ubuntu-22.04
-    needs: build_and_test_be
-    name: Bundle for ${{ matrix.arch }}
-
-    strategy:
-      matrix:
-        include:
-          - arch: armv7
-          - arch: armv6
-    steps:
-      - name: Download complete distribution
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: camillagui-backend
+          name: backend-source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt pyinstaller
+      - name: Freeze, smoke-test and archive
+        env:
+          ASSET_NAME: ${{ matrix.asset }}
+        shell: bash
+        run: python -Bm release_automation.package bundle --asset-name "$ASSET_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.asset }}
+          path: |
+            release-dist/${{ matrix.asset }}
+            release-dist/${{ matrix.asset }}.sha256
+          if-no-files-found: error
+
+  qemu:
+    if: needs.settings.outputs.all == 'true'
+    needs: [settings, source]
+    runs-on: ubuntu-22.04
+    name: Bundle Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [armv7, armv6]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-source
       - uses: uraimo/run-on-arch-action@v2
-        name: Build artifact
-        id: build
         with:
           arch: ${{ matrix.arch }}
           distro: bookworm
-
-          # Mount the artifacts directory as /artifacts in the container
-          dockerRunArgs: |
-            --volume "${PWD}:/cdsp"
+          dockerRunArgs: --volume "${PWD}:/cdsp"
           install: |
-            apt update -y
-            apt install git python3 python3-pip python3-venv python3-dev curl make gcc build-essential binutils pkg-config -y
+            apt-get update
+            apt-get install -y git python3 python3-pip python3-venv python3-dev build-essential binutils pkg-config
           run: |
-            python3 -m venv ./venv
-            ./venv/bin/python3 -m pip config set global.extra-index-url https://www.piwheels.org/simple
-            ./venv/bin/python3 -m pip install -r requirements.txt
-            ./venv/bin/python3 -m pip install pyinstaller
-            ./venv/bin/python3 -m PyInstaller /cdsp/main.py --distpath /cdsp/dist --add-data ./config/:config --add-data ./build/:build --collect-data camilladsp_plot --name camillagui_backend
-
-      - name: Compress as tar.gz
-        run: tar -zcvf bundle.tar.gz -C ./dist camillagui_backend --owner=0 --group=0 --numeric-owner
-
-      - name: Upload bundle as artifact
-        uses: actions/upload-artifact@v4
+            cd /cdsp
+            python3 -m venv /tmp/release-venv
+            /tmp/release-venv/bin/python -m pip install --extra-index-url https://www.piwheels.org/simple -r requirements.txt pyinstaller
+            /tmp/release-venv/bin/python -Bm release_automation.package bundle --asset-name bundle_linux_${{ matrix.arch }}.tar.gz
+      - uses: actions/upload-artifact@v4
         with:
-          name: bundle_linux_${{ matrix.arch }}
-          path: bundle.tar.gz
+          name: release-bundle_linux_${{ matrix.arch }}.tar.gz
+          path: |
+            release-dist/bundle_linux_${{ matrix.arch }}.tar.gz
+            release-dist/bundle_linux_${{ matrix.arch }}.tar.gz.sha256
+          if-no-files-found: error
 
-      - name: Upload bundle to release
-        if: contains(github.ref, 'refs/tags/')
-        uses: svenstaro/upload-release-action@v2
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [source, native, qemu]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: bundle.tar.gz
-          asset_name: bundle_linux_${{ matrix.arch }}.tar.gz
-          tag: ${{ github.ref }}
+          pattern: release-*
+          merge-multiple: true
+          path: assets
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" assets/* --clobber

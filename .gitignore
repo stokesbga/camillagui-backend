@@ -1,3 +1,5 @@
 *.pyc
 build/*
 .venv
+release-dist/
+.release-env/

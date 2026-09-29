@@ -8,6 +8,12 @@ The complete GUI is made up of two parts:
 - a frontend based on React: https://reactjs.org/
 - a backend based on AIOHTTP: https://docs.aiohttp.org/en/stable/
 
+## Releases for this fork
+
+See [Build and install a release](docs/releases.md) for a single ARM64 Raspberry Pi
+bundle containing this frontend, backend, Python runtime and spectrum helper.
+The upstream downloads below do not contain this fork's changes.
+
 ## Download a complete bundle
 The easiest way to run the gui is to download and run one of the published bundles.
 These contain the gui backend server, the frontend files,

@@ -1,4 +1,6 @@
 ---
-camillagui_tag: v4.1.0
+camillagui_repository: stokesbga/camillagui
+# Pin the redesigned frontend; update this SHA when releasing newer UI changes.
+camillagui_tag: 51052ae0e1c8afd95b9f17f99a759423c1843e4a
 pycamilladsp_tag: v4.0.0
 pycamilladsp_plot_tag: v4.1.0
