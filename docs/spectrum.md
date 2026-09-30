@@ -21,7 +21,7 @@ This does not measure the DAC's analog output, amplifier, speakers, or room.
    ```
 
 2. Install `backend/spectrum_tap.py` at a stable absolute path readable by the
-   CamillaDSP service user. It uses only Python 3's standard library and can be
+   CamillaDSP service user. It usevs only Python 3's standard library and can be
    copied independently of the rest of the backend. Release bundles include it as
    `camillagui_backend/spectrum_tap.py`; use that installed absolute path in the
    ALSA command below. Check `/usr/bin/python3` exists.
